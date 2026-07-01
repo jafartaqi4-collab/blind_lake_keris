@@ -1,16 +1,17 @@
 const express = require('express');
-const Anthropic = require('@anthropic-ai/sdk');
 const path = require('path');
 
 const app = express();
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
-if (!process.env.ANTHROPIC_API_KEY) {
-  console.warn('WARNING: ANTHROPIC_API_KEY is not set. The assistant will not work until you set it.');
-}
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+const GEMINI_MODEL = 'gemini-2.5-flash'; // free-tier model, no credit card required
+const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
 
-const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+if (!GEMINI_API_KEY) {
+  console.warn('WARNING: GEMINI_API_KEY is not set. The assistant will not work until you set it.');
+}
 
 const SYSTEM_PROMPT = `You are the official assistant for BLIND LAKE KERIS (also known as Jarba-Tso Keris), a lake destination in the Keris Valley, District Ghanche, Baltistan Division, Gilgit-Baltistan, Pakistan.
 
@@ -72,26 +73,46 @@ There are four main ticketing categories: Swimming, Boating, Fishing, and Visiti
 - Be warm, welcoming, and proud of the destination, like a local guide — but always factually accurate to the data above.
 - Keep replies concise, using short lines or simple bullet points for ticket lists.`;
 
+function toGeminiContents(messages) {
+  return messages.map(m => ({
+    role: m.role === 'assistant' ? 'model' : 'user',
+    parts: [{ text: m.content }]
+  }));
+}
+
 app.post('/api/chat', async (req, res) => {
   try {
     const { messages } = req.body;
     if (!Array.isArray(messages)) {
       return res.status(400).json({ error: 'messages array is required' });
     }
-    const response = await anthropic.messages.create({
-      model: 'claude-sonnet-4-6',
-      max_tokens: 1000,
-      system: SYSTEM_PROMPT,
-      messages
+
+    const response = await fetch(`${GEMINI_URL}?key=${GEMINI_API_KEY}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        system_instruction: { parts: [{ text: SYSTEM_PROMPT }] },
+        contents: toGeminiContents(messages),
+        generationConfig: { maxOutputTokens: 800 }
+      })
     });
-    res.json(response);
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      console.error('Gemini API error:', data);
+      return res.status(500).json({ error: 'Failed to get a response from the assistant.' });
+    }
+
+    const reply = data.candidates?.[0]?.content?.parts?.map(p => p.text).join('\n') || '';
+    res.json({ reply });
   } catch (err) {
-    console.error('Anthropic API error:', err);
+    console.error('Server error:', err);
     res.status(500).json({ error: 'Failed to get a response from the assistant.' });
   }
 });
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`Blind Lake Keris assistant running at http://localhost:${PORT}`);
+  console.log(`Blind Lake Keris assistant (Gemini, free tier) running at http://localhost:${PORT}`);
 });
