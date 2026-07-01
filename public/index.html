@@ -208,6 +208,30 @@
   }
   .inputbar button:disabled{opacity:0.4;}
 
+  .mic-btn{
+    width:42px;height:42px;border-radius:50%;
+    background:var(--ice);
+    border:1px solid #bcdedb;color:var(--lake-deep);font-size:16px;
+    cursor:pointer;flex-shrink:0;
+  }
+  .mic-btn.listening{
+    background:#e05252;border-color:#e05252;color:#fff;
+    animation:pulse 1s infinite;
+  }
+  @keyframes pulse{0%,100%{box-shadow:0 0 0 0 rgba(224,82,82,0.5);}50%{box-shadow:0 0 0 8px rgba(224,82,82,0);}}
+
+  .speak-toggle{
+    position:absolute;top:16px;left:18px;
+    background:rgba(255,255,255,0.16);
+    border:1px solid rgba(255,255,255,0.35);
+    color:var(--sand);
+    font-family:'IBM Plex Mono',monospace;
+    font-size:9px;letter-spacing:0.5px;
+    padding:4px 8px;border-radius:20px;
+    cursor:pointer;
+  }
+  .speak-toggle.off{opacity:0.5;}
+
   .chat::-webkit-scrollbar{width:5px;}
   .chat::-webkit-scrollbar-thumb{background:#cfc4a1;border-radius:3px;}
 </style>
@@ -217,6 +241,7 @@
 <div class="phone">
   <div class="header">
     <div class="free-badge">FREE · GEMINI AI</div>
+    <button class="speak-toggle" id="speakToggle">🔊 VOICE ON</button>
     <div class="title-row">
       <div class="lake-mark">JT</div>
       <div class="title-block">
@@ -242,6 +267,7 @@
   </div>
   <div class="inputbar">
     <input id="input" type="text" placeholder="Ask about Blind Lake Keris…" />
+    <button class="mic-btn" id="micBtn" title="Speak your question">🎤</button>
     <button id="send">➤</button>
   </div>
 </div>
@@ -254,10 +280,76 @@ const chatEl = document.getElementById('chat');
 const inputEl = document.getElementById('input');
 const sendBtn = document.getElementById('send');
 const quickEl = document.getElementById('quick');
+const micBtn = document.getElementById('micBtn');
+const speakToggle = document.getElementById('speakToggle');
+
+let voiceEnabled = true;
+speakToggle.addEventListener('click', () => {
+  voiceEnabled = !voiceEnabled;
+  speakToggle.textContent = voiceEnabled ? '🔊 VOICE ON' : '🔇 VOICE OFF';
+  speakToggle.classList.toggle('off', !voiceEnabled);
+  if (!voiceEnabled) window.speechSynthesis.cancel();
+});
+
+function isUrduText(text){ return /[\u0600-\u06FF]/.test(text); }
+
+// ---- Text-to-speech: reads bot replies aloud ----
+function speak(text){
+  if (!voiceEnabled || !('speechSynthesis' in window)) return;
+  window.speechSynthesis.cancel(); // stop any previous speech first
+  const utterance = new SpeechSynthesisUtterance(text);
+  utterance.lang = isUrduText(text) ? 'ur-PK' : 'en-US';
+  utterance.rate = 0.95;
+  window.speechSynthesis.speak(utterance);
+}
+
+// ---- Speech-to-text: lets the visitor speak their question ----
+const SpeechRecognitionAPI = window.SpeechRecognition || window.webkitSpeechRecognition;
+let recognition = null;
+let isListening = false;
+
+if (SpeechRecognitionAPI) {
+  recognition = new SpeechRecognitionAPI();
+  recognition.continuous = false;
+  recognition.interimResults = false;
+
+  recognition.onstart = () => {
+    isListening = true;
+    micBtn.classList.add('listening');
+    micBtn.textContent = '⏹';
+  };
+  recognition.onend = () => {
+    isListening = false;
+    micBtn.classList.remove('listening');
+    micBtn.textContent = '🎤';
+  };
+  recognition.onerror = () => {
+    isListening = false;
+    micBtn.classList.remove('listening');
+    micBtn.textContent = '🎤';
+  };
+  recognition.onresult = (event) => {
+    const transcript = event.results[0][0].transcript;
+    inputEl.value = transcript;
+    sendMessage(transcript);
+  };
+
+  micBtn.addEventListener('click', () => {
+    if (isListening) {
+      recognition.stop();
+      return;
+    }
+    // Try Urdu first since most visitors use Urdu; browser falls back gracefully if unsupported.
+    recognition.lang = 'ur-PK';
+    try { recognition.start(); } catch(e) { /* already started */ }
+  });
+} else {
+  micBtn.style.display = 'none'; // hide mic button if browser doesn't support voice input
+}
 
 function addBubble(text, role){
   const b = document.createElement('div');
-  const isUrdu = /[\u0600-\u06FF]/.test(text);
+  const isUrdu = isUrduText(text);
   b.className = 'bubble ' + role + (isUrdu ? ' rtl' : '');
   b.textContent = text;
   chatEl.appendChild(b);
@@ -297,6 +389,7 @@ async function sendMessage(text){
     removeTyping();
     const reply = data.reply?.trim() || "Sorry, I couldn't fetch a response just now.";
     addBubble(reply, 'bot');
+    speak(reply);
     history.push({role:'assistant', content:reply});
   }catch(err){
     removeTyping();
@@ -312,7 +405,8 @@ quickEl.addEventListener('click', e=>{
 });
 
 // Greeting
-addBubble("Assalam-o-Alaikum! 🏔️ Welcome to Blind Lake Keris (Jarba-Tso Keris). Ask me about tickets, activities, food, or directions — or tap a quick question below.", 'bot');
+const greetingText = "Assalam-o-Alaikum! 🏔️ Welcome to Blind Lake Keris (Jarba-Tso Keris). Ask me about tickets, activities, food, or directions — or tap a quick question below.";
+addBubble(greetingText, 'bot');
 </script>
 </body>
 </html>
