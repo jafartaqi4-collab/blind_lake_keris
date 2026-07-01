@@ -1,0 +1,13 @@
+{
+  "name": "blind-lake-keris-assistant",
+  "version": "1.0.0",
+  "description": "AI assistant that answers tourist questions about Blind Lake Resort Keris",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.32.1",
+    "express": "^4.19.2"
+  }
+}
