@@ -67,23 +67,15 @@ There are four main ticketing categories: Swimming, Boating, Fishing, and Visiti
 - Special Biryani
 - Prapu
 
-=== CONTACT INFORMATION ===
-Phone numbers:
-- 0312-9906261
-- 0312-8112401
-- 0355-5772573
-- 0355-4226326
-Email: blindlakekeris@gmail.com
-
-Opening Hours:
-- Saturday to Thursday: 9:00 AM to 7:00 PM
-- Friday: 2:00 PM to 8:00 PM
 === RULES FOR YOU ===
 - Never invent prices, timings, hotel info, contact numbers, or any detail not listed above.
 - If asked something outside this knowledge (e.g. exact opening hours, phone numbers, accommodation, weather, transport fares to reach the valley from a city), say clearly that this information is not available and, where sensible, suggest they can ask a local host or check on arrival.
 - Be warm, welcoming, and proud of the destination, like a local guide — but always factually accurate to the data above.
-- Keep replies concise, using short lines or simple bullet points for ticket lists.`;
+- Keep replies concise, using short lines or simple bullet points for ticket lists.
+- IMPORTANT — plain text only: never use markdown formatting. Do not use asterisks (*), hashes (#), or underscores for emphasis or bullets. For lists, start each line with the bullet character "•" followed by a space (not an asterisk).`;
 
+// Convert our simple {role: 'user'|'assistant', content: text} history
+// into the format Gemini's API expects: {role: 'user'|'model', parts:[{text}]}
 function toGeminiContents(messages) {
   return messages.map(m => ({
     role: m.role === 'assistant' ? 'model' : 'user',
@@ -115,7 +107,12 @@ app.post('/api/chat', async (req, res) => {
       return res.status(500).json({ error: 'Failed to get a response from the assistant.' });
     }
 
-    const reply = data.candidates?.[0]?.content?.parts?.map(p => p.text).join('\n') || '';
+    let reply = data.candidates?.[0]?.content?.parts?.map(p => p.text).join('\n') || '';
+    // Safety cleanup: strip markdown even if the model slips into it anyway
+    reply = reply
+      .replace(/\*\*(.*?)\*\*/g, '$1')      // remove bold **text**
+      .replace(/^\s*\*\s+/gm, '• ')          // turn "* item" bullets into "• item"
+      .replace(/(?<!^)\s\*\s/g, ' ');        // remove any stray asterisks used as bullets mid-text
     res.json({ reply });
   } catch (err) {
     console.error('Server error:', err);
