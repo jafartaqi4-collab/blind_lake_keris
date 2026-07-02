@@ -296,9 +296,16 @@ function isUrduText(text){ return /[\u0600-\u06FF]/.test(text); }
 // ---- Text-to-speech: reads bot replies aloud ----
 let availableVoices = [];
 let urduVoiceAvailable = false;
+let preferredUrduVoice = null;
 function loadVoices(){
   availableVoices = window.speechSynthesis.getVoices();
-  urduVoiceAvailable = availableVoices.some(v => v.lang && v.lang.toLowerCase().startsWith('ur'));
+  const urduVoices = availableVoices.filter(v => v.lang && v.lang.toLowerCase().startsWith('ur'));
+  urduVoiceAvailable = urduVoices.length > 0;
+  // Prefer a voice explicitly tagged Pakistani Urdu (ur-PK) over any other Urdu variant (e.g. ur-IN)
+  preferredUrduVoice =
+    urduVoices.find(v => v.lang.toLowerCase() === 'ur-pk') ||
+    urduVoices.find(v => v.name.toLowerCase().includes('pakistan')) ||
+    urduVoices[0] || null;
 }
 if ('speechSynthesis' in window) {
   loadVoices();
@@ -327,6 +334,9 @@ function speak(text){
   window.speechSynthesis.cancel(); // stop any previous speech first
   const utterance = new SpeechSynthesisUtterance(text);
   utterance.lang = wantsUrdu ? 'ur-PK' : 'en-US';
+  if (wantsUrdu && preferredUrduVoice) {
+    utterance.voice = preferredUrduVoice; // explicitly use the Pakistani Urdu voice if available
+  }
   utterance.rate = 0.95;
   window.speechSynthesis.speak(utterance);
 }
