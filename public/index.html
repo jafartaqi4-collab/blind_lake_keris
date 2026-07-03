@@ -401,7 +401,12 @@ function addBubble(text, role){
   const b = document.createElement('div');
   const isUrdu = isUrduText(text);
   b.className = 'bubble ' + role + (isUrdu ? ' rtl' : '');
-  b.textContent = text;
+  // Turn any URL in the message into a tappable link (so Google Maps links open directly)
+  const escaped = text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+  b.innerHTML = escaped.replace(/(https?:\/\/[^\s]+)/g, '<a href="$1" target="_blank" rel="noopener" style="color:inherit;text-decoration:underline;">$1</a>');
   chatEl.appendChild(b);
   chatEl.scrollTop = chatEl.scrollHeight;
   return b;
