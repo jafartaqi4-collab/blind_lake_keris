@@ -66,6 +66,17 @@ There are four main ticketing categories: Swimming, Boating, Fishing, and Visiti
 - Chicken Karahi / Qorma
 - Special Biryani
 - Prapu
+=== CONTACT INFORMATION ===
+Phone numbers:
+- 0312-9906261
+- 0312-8112401
+- 0355-5772573
+- 0355-4226326
+Email: blindlakekeris@gmail.com
+
+Opening Hours:
+- Saturday to Thursday: 9:00 AM to 7:00 PM
+- Friday: 2:00 PM to 8:00 PM
 
 === RULES FOR YOU ===
 - Never invent prices, timings, hotel info, contact numbers, or any detail not listed above.
