@@ -334,6 +334,14 @@ function unlockAudio(){
   audioUnlocked = true;
 }
 
+// Long digit sequences (phone numbers) get read as one huge number by TTS engines
+// (e.g. "three billion..." instead of "zero three one two..."). Fix: insert spaces
+// between digits in any run of 7+ digits (with or without dashes) so the engine
+// speaks them one by one instead of as a giant number.
+function preprocessForSpeech(text){
+  return text.replace(/\d[\d-]{6,}\d/g, (match) => match.replace(/-/g, '').split('').join(' '));
+}
+
 function speak(text){
   if (!voiceEnabled || !('speechSynthesis' in window)) return;
   const wantsUrdu = isUrduText(text);
@@ -343,7 +351,7 @@ function speak(text){
     return;
   }
   window.speechSynthesis.cancel(); // stop any previous speech first
-  const utterance = new SpeechSynthesisUtterance(text);
+  const utterance = new SpeechSynthesisUtterance(preprocessForSpeech(text));
   utterance.lang = wantsUrdu ? 'ur-PK' : 'en-US';
   if (wantsUrdu && preferredUrduVoice) {
     utterance.voice = preferredUrduVoice; // explicitly use the Pakistani Urdu voice if available
