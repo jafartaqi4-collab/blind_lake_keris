@@ -1,9 +1,44 @@
 const express = require('express');
 const path = require('path');
+const fs = require('fs');
 
 const app = express();
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
+
+const REVIEWS_FILE = path.join(__dirname, 'reviews.json');
+function loadReviews(){
+  try {
+    return JSON.parse(fs.readFileSync(REVIEWS_FILE, 'utf-8'));
+  } catch (e) {
+    return [];
+  }
+}
+function saveReviews(reviews){
+  fs.writeFileSync(REVIEWS_FILE, JSON.stringify(reviews, null, 2));
+}
+
+// Get all visitor reviews
+app.get('/api/reviews', (req, res) => {
+  res.json({ reviews: loadReviews() });
+});
+
+// Submit a new visitor review
+app.post('/api/reviews', (req, res) => {
+  const { name, rating, comment } = req.body;
+  if (!comment || !rating) {
+    return res.status(400).json({ error: 'rating and comment are required' });
+  }
+  const reviews = loadReviews();
+  reviews.unshift({
+    name: (name || 'Anonymous').slice(0, 60),
+    rating: Math.max(1, Math.min(5, Number(rating))),
+    comment: String(comment).slice(0, 500),
+    date: new Date().toISOString()
+  });
+  saveReviews(reviews.slice(0, 200)); // keep the most recent 200 reviews
+  res.json({ success: true });
+});
 
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const GEMINI_MODEL = 'gemini-2.5-flash'; // free-tier model, no credit card required
