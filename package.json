@@ -1,13 +1,16 @@
 {
-  "name": "blind-lake-keris-assistant",
+  "name": "blind-lake-keris-assistant-gemini",
   "version": "1.0.0",
-  "description": "AI assistant that answers tourist questions about Blind Lake Resort Keris",
+  "description": "Free AI assistant for Blind Lake Resort Keris using Google Gemini's free-tier API",
   "main": "server.js",
+  "engines": {
+    "node": ">=18"
+  },
   "scripts": {
     "start": "node server.js"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.32.1",
-    "express": "^4.19.2"
+    "express": "^4.19.2",
+    "nodemailer": "^6.9.14"
   }
 }
