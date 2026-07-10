@@ -1,6 +1,7 @@
 const express = require('express');
 const path = require('path');
 const fs = require('fs');
+const nodemailer = require('nodemailer');
 
 const app = express();
 app.use(express.json());
@@ -17,6 +18,49 @@ function loadReviews(){
 function saveReviews(reviews){
   fs.writeFileSync(REVIEWS_FILE, JSON.stringify(reviews, null, 2));
 }
+
+// ---- Unanswered-question alerts: log + email the owner immediately ----
+const UNANSWERED_FILE = path.join(__dirname, 'unanswered.json');
+function logUnanswered(question){
+  let list = [];
+  try { list = JSON.parse(fs.readFileSync(UNANSWERED_FILE, 'utf-8')); } catch(e) {}
+  list.unshift({ question, date: new Date().toISOString() });
+  fs.writeFileSync(UNANSWERED_FILE, JSON.stringify(list.slice(0, 300), null, 2));
+}
+
+let mailTransporter = null;
+if (process.env.GMAIL_APP_PASSWORD) {
+  mailTransporter = nodemailer.createTransport({
+    service: 'gmail',
+    auth: {
+      user: 'blindlakekeris@gmail.com',
+      pass: process.env.GMAIL_APP_PASSWORD
+    }
+  });
+}
+
+async function alertOwner(question){
+  logUnanswered(question);
+  if (!mailTransporter) return; // email not configured yet — logging still happens
+  try {
+    await mailTransporter.sendMail({
+      from: 'blindlakekeris@gmail.com',
+      to: 'blindlakekeris@gmail.com',
+      subject: '🔔 Blind Lake Keris Assistant — new question needs an answer',
+      text: `A visitor asked something the assistant couldn't answer:\n\n"${question}"\n\nPlease add this info to the assistant's knowledge so it can answer next time.`
+    });
+  } catch (err) {
+    console.error('Failed to send owner alert email:', err.message);
+  }
+}
+
+app.get('/api/unanswered', (req, res) => {
+  try {
+    res.json({ questions: JSON.parse(fs.readFileSync(UNANSWERED_FILE, 'utf-8')) });
+  } catch(e) {
+    res.json({ questions: [] });
+  }
+});
 
 // Get all visitor reviews
 app.get('/api/reviews', (req, res) => {
@@ -135,7 +179,8 @@ If a visitor asks who issues tickets or who is at the ticket counter, you can me
 - If asked something outside this knowledge (e.g. exact opening hours, phone numbers, accommodation, weather, transport fares to reach the valley from a city), say clearly that this information is not available and, where sensible, suggest they can ask a local host or check on arrival.
 - Be warm, welcoming, and proud of the destination, like a local guide — but always factually accurate to the data above.
 - Keep replies concise, using short lines or simple bullet points for ticket lists.
-- IMPORTANT — plain text only: never use markdown formatting. Do not use asterisks (*), hashes (#), or underscores for emphasis or bullets. For lists, start each line with the bullet character "•" followed by a space (not an asterisk).`;
+- IMPORTANT — plain text only: never use markdown formatting. Do not use asterisks (*), hashes (#), or underscores for emphasis or bullets. For lists, start each line with the bullet character "•" followed by a space (not an asterisk).
+- FLAGGING UNANSWERED QUESTIONS: if the visitor asks something specifically about Blind Lake Keris itself (its facilities, prices, policies, accommodation, staff, rules, etc.) that is NOT covered in the facts above, after your honest visible answer, add one extra line at the very end in this exact hidden format: ||UNANSWERED: <the visitor's question in a few words>|| — this line is for internal system use only, the visitor will never see it, so always include it whenever you say information is unavailable about Blind Lake Keris specifically. Do NOT add this marker for general knowledge questions unrelated to Blind Lake Keris (e.g. "what is the capital of Pakistan"), only for Blind-Lake-Keris-specific gaps.`;
 
 // Convert our simple {role: 'user'|'assistant', content: text} history
 // into the format Gemini's API expects: {role: 'user'|'model', parts:[{text}]}
@@ -171,6 +216,15 @@ app.post('/api/chat', async (req, res) => {
     }
 
     let reply = data.candidates?.[0]?.content?.parts?.map(p => p.text).join('\n') || '';
+
+    // Detect the hidden "unanswered question" marker and alert the owner
+    const unansweredMatch = reply.match(/\|\|UNANSWERED:\s*(.+?)\|\|/);
+    if (unansweredMatch) {
+      const lastUserMessage = [...messages].reverse().find(m => m.role === 'user');
+      alertOwner(lastUserMessage ? lastUserMessage.content : unansweredMatch[1]);
+      reply = reply.replace(/\|\|UNANSWERED:.*?\|\|/g, '').trim();
+    }
+
     // Safety cleanup: strip markdown even if the model slips into it anyway
     reply = reply
       .replace(/\*\*(.*?)\*\*/g, '$1')      // remove bold **text**
