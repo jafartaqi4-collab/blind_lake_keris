@@ -43,16 +43,22 @@ async function alertOwner(question){
   try {
     const response = await fetch('https://api.web3forms.com/submit', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
       body: JSON.stringify({
         access_key: WEB3FORMS_KEY,
         subject: '🔔 Blind Lake Keris Assistant — new question needs an answer',
         from_name: 'Blind Lake Keris Assistant',
+        email: 'blindlakekeris@gmail.com',
         message: `A visitor asked something the assistant couldn't answer:\n\n"${question}"\n\nPlease add this info to the assistant's knowledge so it can answer next time.`
       })
     });
-    const result = await response.json();
-    console.log('Owner alert email result:', result.success ? 'sent successfully' : result.message);
+    const rawText = await response.text();
+    try {
+      const result = JSON.parse(rawText);
+      console.log('Owner alert email result:', result.success ? 'sent successfully' : result.message);
+    } catch (parseErr) {
+      console.error('Web3Forms did not return JSON. Raw response:', rawText.slice(0, 300));
+    }
   } catch (err) {
     console.error('Failed to send owner alert email:', err.message);
   }
