@@ -1,7 +1,6 @@
 const express = require('express');
 const path = require('path');
 const fs = require('fs');
-const nodemailer = require('nodemailer');
 
 const app = express();
 app.use(express.json());
@@ -28,34 +27,32 @@ function logUnanswered(question){
   fs.writeFileSync(UNANSWERED_FILE, JSON.stringify(list.slice(0, 300), null, 2));
 }
 
-let mailTransporter = null;
-if (process.env.GMAIL_APP_PASSWORD) {
-  console.log('Gmail alert email is configured — GMAIL_APP_PASSWORD found.');
-  mailTransporter = nodemailer.createTransport({
-    service: 'gmail',
-    auth: {
-      user: 'blindlakekeris@gmail.com',
-      pass: process.env.GMAIL_APP_PASSWORD
-    }
-  });
+const WEB3FORMS_KEY = process.env.WEB3FORMS_KEY;
+if (WEB3FORMS_KEY) {
+  console.log('Web3Forms alert email is configured — WEB3FORMS_KEY found.');
 } else {
-  console.log('GMAIL_APP_PASSWORD is NOT set — owner email alerts are disabled, only logging will happen.');
+  console.log('WEB3FORMS_KEY is NOT set — owner email alerts are disabled, only logging will happen.');
 }
 
 async function alertOwner(question){
   logUnanswered(question);
-  if (!mailTransporter) {
-    console.log('Skipped sending email (no mail transporter configured). Question logged:', question);
+  if (!WEB3FORMS_KEY) {
+    console.log('Skipped sending email (no Web3Forms key configured). Question logged:', question);
     return;
   }
   try {
-    const info = await mailTransporter.sendMail({
-      from: 'blindlakekeris@gmail.com',
-      to: 'blindlakekeris@gmail.com',
-      subject: '🔔 Blind Lake Keris Assistant — new question needs an answer',
-      text: `A visitor asked something the assistant couldn't answer:\n\n"${question}"\n\nPlease add this info to the assistant's knowledge so it can answer next time.`
+    const response = await fetch('https://api.web3forms.com/submit', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        access_key: WEB3FORMS_KEY,
+        subject: '🔔 Blind Lake Keris Assistant — new question needs an answer',
+        from_name: 'Blind Lake Keris Assistant',
+        message: `A visitor asked something the assistant couldn't answer:\n\n"${question}"\n\nPlease add this info to the assistant's knowledge so it can answer next time.`
+      })
     });
-    console.log('Owner alert email sent successfully:', info.messageId);
+    const result = await response.json();
+    console.log('Owner alert email result:', result.success ? 'sent successfully' : result.message);
   } catch (err) {
     console.error('Failed to send owner alert email:', err.message);
   }
