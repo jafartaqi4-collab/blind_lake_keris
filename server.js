@@ -30,6 +30,7 @@ function logUnanswered(question){
 
 let mailTransporter = null;
 if (process.env.GMAIL_APP_PASSWORD) {
+  console.log('Gmail alert email is configured — GMAIL_APP_PASSWORD found.');
   mailTransporter = nodemailer.createTransport({
     service: 'gmail',
     auth: {
@@ -37,18 +38,24 @@ if (process.env.GMAIL_APP_PASSWORD) {
       pass: process.env.GMAIL_APP_PASSWORD
     }
   });
+} else {
+  console.log('GMAIL_APP_PASSWORD is NOT set — owner email alerts are disabled, only logging will happen.');
 }
 
 async function alertOwner(question){
   logUnanswered(question);
-  if (!mailTransporter) return; // email not configured yet — logging still happens
+  if (!mailTransporter) {
+    console.log('Skipped sending email (no mail transporter configured). Question logged:', question);
+    return;
+  }
   try {
-    await mailTransporter.sendMail({
+    const info = await mailTransporter.sendMail({
       from: 'blindlakekeris@gmail.com',
       to: 'blindlakekeris@gmail.com',
       subject: '🔔 Blind Lake Keris Assistant — new question needs an answer',
       text: `A visitor asked something the assistant couldn't answer:\n\n"${question}"\n\nPlease add this info to the assistant's knowledge so it can answer next time.`
     });
+    console.log('Owner alert email sent successfully:', info.messageId);
   } catch (err) {
     console.error('Failed to send owner alert email:', err.message);
   }
@@ -221,7 +228,7 @@ app.post('/api/chat', async (req, res) => {
     const unansweredMatch = reply.match(/\|\|UNANSWERED:\s*(.+?)\|\|/);
     if (unansweredMatch) {
       const lastUserMessage = [...messages].reverse().find(m => m.role === 'user');
-      alertOwner(lastUserMessage ? lastUserMessage.content : unansweredMatch[1]);
+      await alertOwner(lastUserMessage ? lastUserMessage.content : unansweredMatch[1]);
       reply = reply.replace(/\|\|UNANSWERED:.*?\|\|/g, '').trim();
     }
 
