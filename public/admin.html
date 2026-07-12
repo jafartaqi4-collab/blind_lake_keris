@@ -87,6 +87,7 @@
   .tab.active { background: #2e7d32; }
   .know-answer { color: #9fd; margin-top: 6px; font-size: 14px; }
   .error { color: #f88; text-align: center; padding: 10px; }
+  .status { text-align: center; font-size: 13px; color: #9fd; margin-top: -6px; margin-bottom: 12px; min-height: 16px; }
 </style>
 </head>
 <body>
@@ -108,12 +109,16 @@
     <div class="tab" id="tabKnowledge" onclick="showTab('knowledge')">شامل شدہ معلومات</div>
   </div>
 
+  <p id="statusMsg" class="status"></p>
+
   <div id="unansweredList"></div>
   <div id="knowledgeList" style="display:none;"></div>
 </div>
 
 <script>
 let ADMIN_KEY = localStorage.getItem('blk_admin_key') || '';
+let unansweredData = [];
+let knowledgeData = [];
 
 function unlock(){
   const key = document.getElementById('keyInput').value.trim();
@@ -126,9 +131,11 @@ function unlock(){
 }
 
 if (ADMIN_KEY) {
-  document.getElementById('gate').style.display = 'none';
-  document.getElementById('app').style.display = 'block';
-  window.addEventListener('DOMContentLoaded', loadUnanswered);
+  window.addEventListener('DOMContentLoaded', () => {
+    document.getElementById('gate').style.display = 'none';
+    document.getElementById('app').style.display = 'block';
+    loadUnanswered();
+  });
 }
 
 function showTab(tab){
@@ -136,28 +143,55 @@ function showTab(tab){
   document.getElementById('tabKnowledge').classList.toggle('active', tab === 'knowledge');
   document.getElementById('unansweredList').style.display = tab === 'unanswered' ? 'block' : 'none';
   document.getElementById('knowledgeList').style.display = tab === 'knowledge' ? 'block' : 'none';
+  setStatus('');
   if (tab === 'unanswered') loadUnanswered();
   else loadKnowledge();
 }
 
+function setStatus(msg, isError){
+  const el = document.getElementById('statusMsg');
+  el.textContent = msg;
+  el.style.color = isError ? '#f88' : '#9fd';
+}
+
 async function apiGet(url){
-  const res = await fetch(url + (url.includes('?') ? '&' : '?') + 'key=' + encodeURIComponent(ADMIN_KEY));
-  if (res.status === 401) { handleAuthError(); return null; }
-  return res.json();
+  try {
+    const res = await fetch(url + (url.includes('?') ? '&' : '?') + 'key=' + encodeURIComponent(ADMIN_KEY));
+    if (res.status === 401) { handleAuthError(); return null; }
+    return await res.json();
+  } catch (e) {
+    setStatus('نیٹ ورک کی خرابی: ' + e.message, true);
+    return null;
+  }
 }
 async function apiPost(url, body){
-  const res = await fetch(url + '?key=' + encodeURIComponent(ADMIN_KEY), {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body)
-  });
-  if (res.status === 401) { handleAuthError(); return null; }
-  return res.json();
+  try {
+    const res = await fetch(url + '?key=' + encodeURIComponent(ADMIN_KEY), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    if (res.status === 401) { handleAuthError(); return null; }
+    const data = await res.json();
+    if (!res.ok) {
+      setStatus('خرابی: ' + (data.error || res.status), true);
+      return null;
+    }
+    return data;
+  } catch (e) {
+    setStatus('نیٹ ورک کی خرابی: ' + e.message, true);
+    return null;
+  }
 }
 async function apiDelete(url){
-  const res = await fetch(url + '?key=' + encodeURIComponent(ADMIN_KEY), { method: 'DELETE' });
-  if (res.status === 401) { handleAuthError(); return null; }
-  return res.json();
+  try {
+    const res = await fetch(url + '?key=' + encodeURIComponent(ADMIN_KEY), { method: 'DELETE' });
+    if (res.status === 401) { handleAuthError(); return null; }
+    return await res.json();
+  } catch (e) {
+    setStatus('نیٹ ورک کی خرابی: ' + e.message, true);
+    return null;
+  }
 }
 function handleAuthError(){
   localStorage.removeItem('blk_admin_key');
@@ -169,18 +203,19 @@ function handleAuthError(){
 async function loadUnanswered(){
   const data = await apiGet('/api/unanswered');
   if (!data) return;
+  unansweredData = data.questions;
   const container = document.getElementById('unansweredList');
-  if (!data.questions.length) {
+  if (!unansweredData.length) {
     container.innerHTML = '<div class="empty">فی الحال کوئی نامعلوم سوال نہیں ہے 🎉</div>';
     return;
   }
-  container.innerHTML = data.questions.map((q, i) => `
+  container.innerHTML = unansweredData.map((q, i) => `
     <div class="card">
       <div class="question">${escapeHtml(q.question)}</div>
       <div class="date">${new Date(q.date).toLocaleString('en-GB')}</div>
       <textarea id="answer-${i}" placeholder="اس سوال کا جواب یہاں لکھیں..."></textarea>
       <div class="btn-row">
-        <button class="save" onclick="answerQuestion(${i}, ${JSON.stringify(q.question)})">محفوظ کریں</button>
+        <button class="save" onclick="answerQuestion(${i})">محفوظ کریں</button>
         <button class="dismiss" onclick="dismissQuestion(${i})">نظر انداز کریں</button>
       </div>
     </div>
@@ -190,12 +225,13 @@ async function loadUnanswered(){
 async function loadKnowledge(){
   const data = await apiGet('/api/knowledge');
   if (!data) return;
+  knowledgeData = data.knowledge;
   const container = document.getElementById('knowledgeList');
-  if (!data.knowledge.length) {
+  if (!knowledgeData.length) {
     container.innerHTML = '<div class="empty">ابھی تک کوئی معلومات شامل نہیں کی گئی</div>';
     return;
   }
-  container.innerHTML = data.knowledge.map((k, i) => `
+  container.innerHTML = knowledgeData.map((k, i) => `
     <div class="card">
       <div class="question">${escapeHtml(k.question)}</div>
       <div class="know-answer">${escapeHtml(k.answer)}</div>
@@ -207,11 +243,15 @@ async function loadKnowledge(){
   `).join('');
 }
 
-async function answerQuestion(index, question){
-  const answer = document.getElementById('answer-' + index).value.trim();
-  if (!answer) { alert('براہ کرم جواب لکھیں'); return; }
+async function answerQuestion(index){
+  const question = unansweredData[index] ? unansweredData[index].question : '';
+  const answerBox = document.getElementById('answer-' + index);
+  const answer = answerBox ? answerBox.value.trim() : '';
+  if (!answer) { setStatus('براہ کرم جواب لکھیں', true); return; }
+  setStatus('محفوظ ہو رہا ہے...');
   const result = await apiPost('/api/answer-question', { question, answer, index });
   if (result && result.success) {
+    setStatus('کامیابی سے محفوظ ہو گیا ✅');
     loadUnanswered();
   }
 }
@@ -219,6 +259,7 @@ async function answerQuestion(index, question){
 async function dismissQuestion(index){
   const result = await apiDelete('/api/unanswered/' + index);
   if (result && result.success) {
+    setStatus('سوال ہٹا دیا گیا');
     loadUnanswered();
   }
 }
@@ -226,6 +267,7 @@ async function dismissQuestion(index){
 async function deleteKnowledge(index){
   const result = await apiDelete('/api/knowledge/' + index);
   if (result && result.success) {
+    setStatus('حذف کر دیا گیا');
     loadKnowledge();
   }
 }
