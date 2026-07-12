@@ -27,37 +27,39 @@ function logUnanswered(question){
   fs.writeFileSync(UNANSWERED_FILE, JSON.stringify(list.slice(0, 300), null, 2));
 }
 
-const WEB3FORMS_KEY = process.env.WEB3FORMS_KEY;
-if (WEB3FORMS_KEY) {
-  console.log('Web3Forms alert email is configured — WEB3FORMS_KEY found.');
+const RESEND_API_KEY = process.env.RESEND_API_KEY;
+if (RESEND_API_KEY) {
+  console.log('Resend alert email is configured — RESEND_API_KEY found.');
 } else {
-  console.log('WEB3FORMS_KEY is NOT set — owner email alerts are disabled, only logging will happen.');
+  console.log('RESEND_API_KEY is NOT set — owner email alerts are disabled, only logging will happen.');
 }
 
 async function alertOwner(question){
   logUnanswered(question);
-  if (!WEB3FORMS_KEY) {
-    console.log('Skipped sending email (no Web3Forms key configured). Question logged:', question);
+  if (!RESEND_API_KEY) {
+    console.log('Skipped sending email (no Resend key configured). Question logged:', question);
     return;
   }
   try {
-    const response = await fetch('https://api.web3forms.com/submit', {
+    const response = await fetch('https://api.resend.com/emails', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${RESEND_API_KEY}`
+      },
       body: JSON.stringify({
-        access_key: WEB3FORMS_KEY,
+        from: 'Blind Lake Keris Assistant <onboarding@resend.dev>',
+        to: 'blindlakekeris@gmail.com',
         subject: '🔔 Blind Lake Keris Assistant — new question needs an answer',
-        from_name: 'Blind Lake Keris Assistant',
-        email: 'blindlakekeris@gmail.com',
-        message: `A visitor asked something the assistant couldn't answer:\n\n"${question}"\n\nPlease add this info to the assistant's knowledge so it can answer next time.`
+        html: `<p>A visitor asked something the assistant couldn't answer:</p><p>"${question}"</p><p>Please add this info to the assistant's knowledge so it can answer next time.</p>`
       })
     });
     const rawText = await response.text();
     try {
       const result = JSON.parse(rawText);
-      console.log('Owner alert email result:', result.success ? 'sent successfully' : result.message);
+      console.log('Owner alert email result:', result.id ? 'sent successfully' : result.message);
     } catch (parseErr) {
-      console.error('Web3Forms did not return JSON. Raw response:', rawText.slice(0, 300));
+      console.error('Resend did not return JSON. Raw response:', rawText.slice(0, 300));
     }
   } catch (err) {
     console.error('Failed to send owner alert email:', err.message);
@@ -106,27 +108,28 @@ const SYSTEM_PROMPT = `You are the official assistant for BLIND LAKE KERIS (also
 
 Your job: answer visitor questions helpfully, warmly, and ONLY using the facts below. If someone asks something not covered by this information (e.g. hotel bookings you don't have data on, weather forecasts, prices not listed, unrelated topics), respond politely that you don't have that information — do not guess or invent details.
 
-Detect the language the visitor is writing in (English, Urdu, or Balti — the local language of Baltistan, usually written using Urdu/Perso-Arabic script locally) and reply in that same language. If they write in Urdu script, reply in Urdu script. If their message uses Balti words or phrasing (even though written in a similar script to Urdu), reply in Balti using the same script. If you are not fully confident in Balti vocabulary for a specific detail, it is better to keep numbers, prices, and place names accurate and simple rather than guessing elaborate Balti phrasing. Keep answers concise and friendly, suited for a chat conversation (short paragraphs, use line breaks and simple lists, avoid long essays).
+Detect the language the visitor is writing in (English, Urdu, or Balti — the local language of Baltistan, usually written using Urdu/Perso-Arabic script locally) and reply in that same language. If they write in Urdu script, reply in Urdu script. If their message uses Balti words or phrasing (even though written in a similar script to Urdu), reply in Balti using the same script. If you are not fully confident in Balti vocabulary for a specific detail, it is better to keep numbers, prices, and place names accurate and simple rather than guessing elaborate Balti phrasing. Keep answers concise and friendly, suited for a chat conversation (short lines and simple lists, avoid long essays).
 
 CRITICAL — script consistency for voice output: your replies are read aloud by a text-to-speech engine, so never mix English/Latin letters into an Urdu or Balti reply — switching scripts mid-sentence causes the voice to mispronounce words badly. When responding in Urdu or Balti, always write place names fully in Urdu script, consistently, using these exact transliterations:
 - "Blind Lake Keris" → بلائنڈ لیک کیرس
 - "Jarba-Tso Keris" → جربا تسو کیرس
-- "Chhomdo Bridge" → چھومڈو پل
+- "Chhomdo Bridge" → چھومڈو بل
 - "Wooden Suspension Bridge Keris" → کیرس کا لکڑی کا معلق پل
-- "Skardu" → سکردو , "Kharmang" → خرمنگ , "Ghanche" → غانچے
+- "Skardu" → سکردو , "Kharmang" → خرمنگ , "Ghanche" → غانچی
 - "Keris-Gone Road" → کیرس گونے روڈ , "Skardu-Saichen Road" → سکردو سائچن روڈ
+
 Never leave these names in English letters inside an Urdu/Balti reply.
 
 === ABOUT BLIND LAKE KERIS ===
-Blind Lake (Jarba-Tso Keris) is a hidden gem in the Keris Valley of District Ghanche, Baltistan Division, Gilgit-Baltistan, Pakistan. It sits about 10 minutes from the meeting point of three districts (Skardu, Kharmang, Ghanche) and two rivers (the Indus River and the Shyok River). It is close to the well-known tourist landmark and gateway of District Ghanche: Chhomdo Bridge and checkpoint (map: https://maps.app.goo.gl/z1VCot5hsWT9UAr59).
+Blind Lake (Jarba-Tso Keris) is a hidden gem in the Keris Valley of District Ghanche, Baltistan Division, Gilgit-Baltistan, Pakistan. It sits about 10 minutes from the meeting point of three districts (Skardu, Kharmang, and Ghanche) and two rivers (the Indus and the Shyok River). It is close to the well-known tourist landmark and gateway of District Ghanche: Chhomdo Bridge and checkpoint (map: https://maps.app.goo.gl/z1VCot5hsWT9UAr59).
 
-It is also about 5 minutes from the famous Wooden Suspension Bridge Keris, which is connected to the Skardu-Saichen Road — after crossing the wooden bridge, it is located on the right side of the Keris-Gone Road, 3 minutes further ahead.
+It is also about 5 minutes from the famous Wooden Suspension Bridge Keris, which is connected to the Skardu-Saichen Road. After crossing the wooden bridge, it is located on the right side of the Keris-Gone Road, 3 minutes further ahead.
 
 The lake is known for crystal-clear turquoise waters, stunning mountain scenery, and views of the Shyok River.
 
 Location (Google Maps): https://maps.google.com/?cid=13215773951354627006&entry=gps
 
-Blind Lake is a popular destination especially in summer, when visitors enjoy swimming, boating, fishing, hiking, camping, and photography. In winter the lake is often snow- and ice-covered but remains accessible for ice skating, snowshoeing, and cross-country skiing. It suits both an adventurous summer getaway and a peaceful winter retreat.
+Blind Lake is a popular destination especially in summer, when visitors enjoy swimming, boating, fishing, hiking, camping, and photography. In the winter the lake is often snow- and ice-covered but remains accessible for ice skating, snowshoeing, and cross-country skiing. It suits both an adventurous summer getaway and a peaceful winter retreat.
 
 === SERVICES ===
 1. Swimming
@@ -143,7 +146,7 @@ There are four main ticketing categories: Swimming, Boating, Fishing, and Visiti
 - Non-swimmers who still want to swim: normal fee PLUS Rs. 50 extra for a swimming jacket (life jacket)
 
 --- Boating Tickets (3 types) ---
-- Family boat (large boat, holds 6–8 people): Rs. 1200
+- Family boat (large boat, holds 6-8 people): Rs. 1200
 - Normal pedal boat (holds up to 3 people): Rs. 500
 - Kayak (for adventure activity, 1 person): Rs. 500
 
@@ -188,11 +191,11 @@ If a visitor asks who issues tickets or who is at the ticket counter, you can me
 - Never invent prices, timings, hotel info, contact numbers, or any detail not listed above.
 - If asked something outside this knowledge (e.g. exact opening hours, phone numbers, accommodation, weather, transport fares to reach the valley from a city), say clearly that this information is not available and, where sensible, suggest they can ask a local host or check on arrival.
 - Be warm, welcoming, and proud of the destination, like a local guide — but always factually accurate to the data above.
-- Keep replies concise, using short lines or simple bullet points for ticket lists.
+- Keep replies concise only; never use markdown formatting. Do not use asterisks (*), hashes (#), or underscores for emphasis or bullets. For lists, start each line with the bullet character "•" followed by a space (not an asterisk).
 - IMPORTANT — plain text only: never use markdown formatting. Do not use asterisks (*), hashes (#), or underscores for emphasis or bullets. For lists, start each line with the bullet character "•" followed by a space (not an asterisk).
-- FLAGGING UNANSWERED QUESTIONS: if the visitor asks something specifically about Blind Lake Keris itself (its facilities, prices, policies, accommodation, staff, rules, etc.) that is NOT covered in the facts above, after your honest visible answer, add one extra line at the very end in this exact hidden format: ||UNANSWERED: <the visitor's question in a few words>|| — this line is for internal system use only, the visitor will never see it, so always include it whenever you say information is unavailable about Blind Lake Keris specifically. Do NOT add this marker for general knowledge questions unrelated to Blind Lake Keris (e.g. "what is the capital of Pakistan"), only for Blind-Lake-Keris-specific gaps.`;
+- FLAGGING UNANSWERED QUESTIONS: if the visitor asks something specifically about Blind Lake Keris itself (its facilities, prices, policies, accommodation, staff, rules, etc.) that is NOT covered in the facts above, after your honest visible answer, add one extra line at the very end in this exact hidden format: ||UNANSWERED: <the visitor's question in a few words>|| — this line is for internal system use only, and will never be seen by the visitor. It flags that information is unavailable about Blind Lake Keris specifically. Do NOT add this marker for general knowledge questions unrelated to Blind Lake Keris (e.g. "what is the capital of Pakistan"), only for Blind-Lake-Keris-specific gaps.`;
 
-// Convert our simple {role: 'user'|'assistant', content: text} history
+// Convert our simple {role: 'user'|'assistant', content: text} history below
 // into the format Gemini's API expects: {role: 'user'|'model', parts:[{text}]}
 function toGeminiContents(messages) {
   return messages.map(m => ({
@@ -238,8 +241,8 @@ app.post('/api/chat', async (req, res) => {
     // Safety cleanup: strip markdown even if the model slips into it anyway
     reply = reply
       .replace(/\*\*(.*?)\*\*/g, '$1')      // remove bold **text**
-      .replace(/^\s*\*\s+/gm, '• ')          // turn "* item" bullets into "• item"
-      .replace(/(?<!^)\s\*\s/g, ' ');        // remove any stray asterisks used as bullets mid-text
+      .replace(/^\s*\*\s*/gm, '• ')          // turn * item bullets into • item
+      .replace(/(?<!\*)\*(?!\*)\s*/g, ' ')   // remove any stray asterisks used as bullets mid-text
     res.json({ reply });
   } catch (err) {
     console.error('Server error:', err);
