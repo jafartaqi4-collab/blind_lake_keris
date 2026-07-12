@@ -20,11 +20,35 @@ function saveReviews(reviews){
 
 // ---- Unanswered-question alerts: log + email the owner immediately ----
 const UNANSWERED_FILE = path.join(__dirname, 'unanswered.json');
-function logUnanswered(question){
-  let list = [];
-  try { list = JSON.parse(fs.readFileSync(UNANSWERED_FILE, 'utf-8')); } catch(e) {}
-  list.unshift({ question, date: new Date().toISOString() });
+function loadUnanswered(){
+  try { return JSON.parse(fs.readFileSync(UNANSWERED_FILE, 'utf-8')); } catch(e) { return []; }
+}
+function saveUnanswered(list){
   fs.writeFileSync(UNANSWERED_FILE, JSON.stringify(list.slice(0, 300), null, 2));
+}
+function logUnanswered(question){
+  const list = loadUnanswered();
+  list.unshift({ question, date: new Date().toISOString() });
+  saveUnanswered(list);
+}
+
+// ---- Owner-provided knowledge additions: answers get added to the assistant's brain ----
+const KNOWLEDGE_FILE = path.join(__dirname, 'knowledge.json');
+function loadKnowledge(){
+  try { return JSON.parse(fs.readFileSync(KNOWLEDGE_FILE, 'utf-8')); } catch(e) { return []; }
+}
+function saveKnowledge(list){
+  fs.writeFileSync(KNOWLEDGE_FILE, JSON.stringify(list, null, 2));
+}
+
+// ---- Simple admin protection ----
+const ADMIN_KEY = process.env.ADMIN_KEY || 'changeme123';
+function checkAdmin(req, res, next){
+  const key = req.query.key || req.headers['x-admin-key'];
+  if (key !== ADMIN_KEY) {
+    return res.status(401).json({ error: 'Unauthorized: wrong or missing admin key' });
+  }
+  next();
 }
 
 const RESEND_API_KEY = process.env.RESEND_API_KEY;
@@ -51,7 +75,7 @@ async function alertOwner(question){
         from: 'Blind Lake Keris Assistant <onboarding@resend.dev>',
         to: 'blindlakekeris@gmail.com',
         subject: '🔔 Blind Lake Keris Assistant — new question needs an answer',
-        html: `<p>A visitor asked something the assistant couldn't answer:</p><p>"${question}"</p><p>Please add this info to the assistant's knowledge so it can answer next time.</p>`
+        html: `<p>A visitor asked something the assistant couldn't answer:</p><p>"${question}"</p><p>Please open the admin panel to add this info so the assistant can answer next time:</p><p>${process.env.ADMIN_PANEL_URL || '(open /admin.html on your site)'}</p>`
       })
     });
     const rawText = await response.text();
@@ -66,12 +90,54 @@ async function alertOwner(question){
   }
 }
 
-app.get('/api/unanswered', (req, res) => {
-  try {
-    res.json({ questions: JSON.parse(fs.readFileSync(UNANSWERED_FILE, 'utf-8')) });
-  } catch(e) {
-    res.json({ questions: [] });
+// ---- Admin API: view + answer unanswered questions ----
+app.get('/api/unanswered', checkAdmin, (req, res) => {
+  res.json({ questions: loadUnanswered() });
+});
+
+app.get('/api/knowledge', checkAdmin, (req, res) => {
+  res.json({ knowledge: loadKnowledge() });
+});
+
+// Answer a specific unanswered question: adds it to the assistant's knowledge
+// and removes it from the unanswered list.
+app.post('/api/answer-question', checkAdmin, (req, res) => {
+  const { question, answer, index } = req.body;
+  if (!question || !answer) {
+    return res.status(400).json({ error: 'question and answer are required' });
   }
+  const knowledge = loadKnowledge();
+  knowledge.unshift({ question, answer, date: new Date().toISOString() });
+  saveKnowledge(knowledge);
+
+  if (typeof index === 'number') {
+    const list = loadUnanswered();
+    list.splice(index, 1);
+    saveUnanswered(list);
+  }
+  res.json({ success: true });
+});
+
+// Dismiss an unanswered question without adding knowledge
+app.delete('/api/unanswered/:index', checkAdmin, (req, res) => {
+  const idx = parseInt(req.params.index, 10);
+  const list = loadUnanswered();
+  if (idx >= 0 && idx < list.length) {
+    list.splice(idx, 1);
+    saveUnanswered(list);
+  }
+  res.json({ success: true });
+});
+
+// Remove a piece of knowledge (in case of a mistake)
+app.delete('/api/knowledge/:index', checkAdmin, (req, res) => {
+  const idx = parseInt(req.params.index, 10);
+  const list = loadKnowledge();
+  if (idx >= 0 && idx < list.length) {
+    list.splice(idx, 1);
+    saveKnowledge(list);
+  }
+  res.json({ success: true });
 });
 
 // Get all visitor reviews
@@ -204,6 +270,14 @@ function toGeminiContents(messages) {
   }));
 }
 
+// Build the final system prompt, including any owner-added knowledge
+function buildFullSystemPrompt() {
+  const extra = loadKnowledge();
+  if (!extra.length) return SYSTEM_PROMPT;
+  const extraText = extra.map(k => `Q: ${k.question}\nA: ${k.answer}`).join('\n\n');
+  return `${SYSTEM_PROMPT}\n\n=== ADDITIONAL INFO ADDED BY THE OWNER (treat this as equally trustworthy fact) ===\n${extraText}`;
+}
+
 app.post('/api/chat', async (req, res) => {
   try {
     const { messages } = req.body;
@@ -215,7 +289,7 @@ app.post('/api/chat', async (req, res) => {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        system_instruction: { parts: [{ text: SYSTEM_PROMPT }] },
+        system_instruction: { parts: [{ text: buildFullSystemPrompt() }] },
         contents: toGeminiContents(messages),
         generationConfig: { maxOutputTokens: 800 }
       })
