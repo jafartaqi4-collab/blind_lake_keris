@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="ur" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Blind Lake Keris — Admin Panel</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    font-family: 'Noto Nastaliq Urdu', 'Segoe UI', Tahoma, sans-serif;
+    background: #0f1720;
+    color: #eee;
+    margin: 0;
+    padding: 16px;
+  }
+  h1 { font-size: 20px; margin-bottom: 4px; }
+  .sub { color: #9ab; font-size: 13px; margin-bottom: 16px; }
+  .card {
+    background: #16202b;
+    border: 1px solid #24333f;
+    border-radius: 10px;
+    padding: 14px;
+    margin-bottom: 14px;
+  }
+  .question {
+    font-size: 16px;
+    margin-bottom: 8px;
+    color: #ffd27a;
+  }
+  .date { font-size: 12px; color: #789; margin-bottom: 10px; }
+  textarea {
+    width: 100%;
+    min-height: 70px;
+    background: #0f1720;
+    color: #eee;
+    border: 1px solid #2b3d4a;
+    border-radius: 8px;
+    padding: 8px;
+    font-size: 15px;
+    font-family: inherit;
+  }
+  .btn-row { display: flex; gap: 8px; margin-top: 8px; }
+  button {
+    border: none;
+    border-radius: 8px;
+    padding: 10px 14px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .save { background: #2e7d32; color: white; flex: 1; }
+  .dismiss { background: #3a3a3a; color: #ccc; }
+  .delete { background: #7a2e2e; color: white; }
+  .empty { color: #789; text-align: center; padding: 30px 0; }
+  .keybox {
+    text-align: center;
+    padding-top: 80px;
+  }
+  .keybox input {
+    padding: 10px;
+    border-radius: 8px;
+    border: 1px solid #2b3d4a;
+    background: #16202b;
+    color: #eee;
+    font-size: 15px;
+    width: 80%;
+    max-width: 300px;
+  }
+  .keybox button {
+    display: block;
+    margin: 12px auto 0;
+    background: #2e7d32;
+    color: white;
+    padding: 10px 24px;
+  }
+  .tabs { display: flex; gap: 8px; margin-bottom: 14px; }
+  .tab {
+    flex: 1;
+    text-align: center;
+    padding: 10px;
+    background: #16202b;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 14px;
+    border: 1px solid #24333f;
+  }
+  .tab.active { background: #2e7d32; }
+  .know-answer { color: #9fd; margin-top: 6px; font-size: 14px; }
+  .error { color: #f88; text-align: center; padding: 10px; }
+</style>
+</head>
+<body>
+
+<div id="gate" class="keybox">
+  <h1>🔑 Admin Panel — Blind Lake Keris</h1>
+  <p class="sub">جاری رکھنے کے لیے اپنی admin key درج کریں</p>
+  <input id="keyInput" type="password" placeholder="Admin key" />
+  <button onclick="unlock()">داخل ہوں</button>
+  <p id="gateError" class="error"></p>
+</div>
+
+<div id="app" style="display:none;">
+  <h1>بلائنڈ لیک کیرس — ایڈمن پینل</h1>
+  <p class="sub">نامعلوم سوالات کے جوابات دیں — یہ خودکار طور پر اسسٹنٹ کو سکھا دیا جائے گا</p>
+
+  <div class="tabs">
+    <div class="tab active" id="tabUnanswered" onclick="showTab('unanswered')">نامعلوم سوالات</div>
+    <div class="tab" id="tabKnowledge" onclick="showTab('knowledge')">شامل شدہ معلومات</div>
+  </div>
+
+  <div id="unansweredList"></div>
+  <div id="knowledgeList" style="display:none;"></div>
+</div>
+
+<script>
+let ADMIN_KEY = localStorage.getItem('blk_admin_key') || '';
+
+function unlock(){
+  const key = document.getElementById('keyInput').value.trim();
+  if (!key) return;
+  ADMIN_KEY = key;
+  localStorage.setItem('blk_admin_key', key);
+  document.getElementById('gate').style.display = 'none';
+  document.getElementById('app').style.display = 'block';
+  loadUnanswered();
+}
+
+if (ADMIN_KEY) {
+  document.getElementById('gate').style.display = 'none';
+  document.getElementById('app').style.display = 'block';
+  window.addEventListener('DOMContentLoaded', loadUnanswered);
+}
+
+function showTab(tab){
+  document.getElementById('tabUnanswered').classList.toggle('active', tab === 'unanswered');
+  document.getElementById('tabKnowledge').classList.toggle('active', tab === 'knowledge');
+  document.getElementById('unansweredList').style.display = tab === 'unanswered' ? 'block' : 'none';
+  document.getElementById('knowledgeList').style.display = tab === 'knowledge' ? 'block' : 'none';
+  if (tab === 'unanswered') loadUnanswered();
+  else loadKnowledge();
+}
+
+async function apiGet(url){
+  const res = await fetch(url + (url.includes('?') ? '&' : '?') + 'key=' + encodeURIComponent(ADMIN_KEY));
+  if (res.status === 401) { handleAuthError(); return null; }
+  return res.json();
+}
+async function apiPost(url, body){
+  const res = await fetch(url + '?key=' + encodeURIComponent(ADMIN_KEY), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  });
+  if (res.status === 401) { handleAuthError(); return null; }
+  return res.json();
+}
+async function apiDelete(url){
+  const res = await fetch(url + '?key=' + encodeURIComponent(ADMIN_KEY), { method: 'DELETE' });
+  if (res.status === 401) { handleAuthError(); return null; }
+  return res.json();
+}
+function handleAuthError(){
+  localStorage.removeItem('blk_admin_key');
+  document.getElementById('app').style.display = 'none';
+  document.getElementById('gate').style.display = 'block';
+  document.getElementById('gateError').textContent = 'غلط key — دوبارہ کوشش کریں';
+}
+
+async function loadUnanswered(){
+  const data = await apiGet('/api/unanswered');
+  if (!data) return;
+  const container = document.getElementById('unansweredList');
+  if (!data.questions.length) {
+    container.innerHTML = '<div class="empty">فی الحال کوئی نامعلوم سوال نہیں ہے 🎉</div>';
+    return;
+  }
+  container.innerHTML = data.questions.map((q, i) => `
+    <div class="card">
+      <div class="question">${escapeHtml(q.question)}</div>
+      <div class="date">${new Date(q.date).toLocaleString('en-GB')}</div>
+      <textarea id="answer-${i}" placeholder="اس سوال کا جواب یہاں لکھیں..."></textarea>
+      <div class="btn-row">
+        <button class="save" onclick="answerQuestion(${i}, ${JSON.stringify(q.question)})">محفوظ کریں</button>
+        <button class="dismiss" onclick="dismissQuestion(${i})">نظر انداز کریں</button>
+      </div>
+    </div>
+  `).join('');
+}
+
+async function loadKnowledge(){
+  const data = await apiGet('/api/knowledge');
+  if (!data) return;
+  const container = document.getElementById('knowledgeList');
+  if (!data.knowledge.length) {
+    container.innerHTML = '<div class="empty">ابھی تک کوئی معلومات شامل نہیں کی گئی</div>';
+    return;
+  }
+  container.innerHTML = data.knowledge.map((k, i) => `
+    <div class="card">
+      <div class="question">${escapeHtml(k.question)}</div>
+      <div class="know-answer">${escapeHtml(k.answer)}</div>
+      <div class="date">${new Date(k.date).toLocaleString('en-GB')}</div>
+      <div class="btn-row">
+        <button class="delete" onclick="deleteKnowledge(${i})">حذف کریں</button>
+      </div>
+    </div>
+  `).join('');
+}
+
+async function answerQuestion(index, question){
+  const answer = document.getElementById('answer-' + index).value.trim();
+  if (!answer) { alert('براہ کرم جواب لکھیں'); return; }
+  const result = await apiPost('/api/answer-question', { question, answer, index });
+  if (result && result.success) {
+    loadUnanswered();
+  }
+}
+
+async function dismissQuestion(index){
+  const result = await apiDelete('/api/unanswered/' + index);
+  if (result && result.success) {
+    loadUnanswered();
+  }
+}
+
+async function deleteKnowledge(index){
+  const result = await apiDelete('/api/knowledge/' + index);
+  if (result && result.success) {
+    loadKnowledge();
+  }
+}
+
+function escapeHtml(str){
+  const div = document.createElement('div');
+  div.textContent = str;
+  return div.innerHTML;
+}
+</script>
+</body>
+</html>
