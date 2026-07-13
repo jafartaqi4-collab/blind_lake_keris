@@ -1,6 +1,7 @@
 const express = require('express');
 const path = require('path');
 const fs = require('fs');
+const crypto = require('crypto');
 
 const app = express();
 app.use(express.json());
@@ -18,18 +19,37 @@ function saveReviews(reviews){
   fs.writeFileSync(REVIEWS_FILE, JSON.stringify(reviews, null, 2));
 }
 
-// ---- Unanswered-question alerts: log + email the owner immediately ----
-const UNANSWERED_FILE = path.join(__dirname, 'unanswered.json');
-function loadUnanswered(){
-  try { return JSON.parse(fs.readFileSync(UNANSWERED_FILE, 'utf-8')); } catch(e) { return []; }
+// ---------------------------------------------------------------
+// Unanswered questions — now stores FULL lifecycle of each question:
+// created -> (optional contact info added) -> answered -> notified
+// Nothing is deleted anymore; "answered" flag controls visibility.
+// ---------------------------------------------------------------
+const QUESTIONS_FILE = path.join(__dirname, 'unanswered.json');
+
+function loadQuestions(){
+  try { return JSON.parse(fs.readFileSync(QUESTIONS_FILE, 'utf-8')); } catch(e) { return []; }
 }
-function saveUnanswered(list){
-  fs.writeFileSync(UNANSWERED_FILE, JSON.stringify(list.slice(0, 300), null, 2));
+function saveQuestions(list){
+  fs.writeFileSync(QUESTIONS_FILE, JSON.stringify(list.slice(0, 1000), null, 2));
 }
-function logUnanswered(question){
-  const list = loadUnanswered();
-  list.unshift({ question, date: new Date().toISOString() });
-  saveUnanswered(list);
+
+// Create a new unanswered-question record. Returns the id.
+function logUnanswered(question, sessionId){
+  const list = loadQuestions();
+  const id = crypto.randomUUID();
+  list.unshift({
+    id,
+    question,
+    sessionId: sessionId || null,
+    date: new Date().toISOString(),
+    answered: false,
+    answer: null,
+    contactMethod: null,   // 'whatsapp' | 'email' | null
+    contactValue: null,
+    notified: false
+  });
+  saveQuestions(list);
+  return id;
 }
 
 // ---- Owner-provided knowledge additions: answers get added to the assistant's brain ----
@@ -58,8 +78,47 @@ if (RESEND_API_KEY) {
   console.log('RESEND_API_KEY is NOT set — owner email alerts are disabled, only logging will happen.');
 }
 
+// ---------------------------------------------------------------
+// WhatsApp sender (Meta Cloud API) — used to notify a VISITOR
+// back with their answer, if they left a WhatsApp number.
+// Optional: only runs if WHATSAPP_TOKEN + WHATSAPP_PHONE_ID are set.
+// ---------------------------------------------------------------
+const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN;
+const WHATSAPP_PHONE_ID = process.env.WHATSAPP_PHONE_ID;
+
+async function sendWhatsAppMessage(phoneNumber, message){
+  if (!WHATSAPP_TOKEN || !WHATSAPP_PHONE_ID) {
+    console.log('WhatsApp not configured — skipping visitor notification.');
+    return;
+  }
+  const cleanNumber = String(phoneNumber).replace(/[^\d]/g, '');
+  try {
+    const response = await fetch(`https://graph.facebook.com/v20.0/${WHATSAPP_PHONE_ID}/messages`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${WHATSAPP_TOKEN}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        messaging_product: 'whatsapp',
+        to: cleanNumber,
+        type: 'text',
+        text: { body: message }
+      })
+    });
+    if (!response.ok) {
+      const errText = await response.text();
+      console.error('WhatsApp send failed:', errText);
+    } else {
+      console.log('WhatsApp notification sent to visitor.');
+    }
+  } catch (err) {
+    console.error('WhatsApp send error:', err.message);
+  }
+}
+
+// Notify the owner by email that a new question needs an answer (unchanged behavior)
 async function alertOwner(question){
-  logUnanswered(question);
   if (!RESEND_API_KEY) {
     console.log('Skipped sending email (no Resend key configured). Question logged:', question);
     return;
@@ -90,41 +149,83 @@ async function alertOwner(question){
   }
 }
 
+// Notify the VISITOR back once their question is answered
+async function notifyVisitor(record){
+  const message = `السلام علیکم!\n\nآپ نے بلائنڈ لیک کیرس اسسٹنٹ سے پوچھا تھا:\n"${record.question}"\n\nجواب:\n${record.answer}\n\nشکریہ - بلائنڈ لیک کیرس`;
+
+  if (record.contactMethod === 'whatsapp' && record.contactValue) {
+    await sendWhatsAppMessage(record.contactValue, message);
+  }
+
+  if (record.contactMethod === 'email' && record.contactValue && RESEND_API_KEY) {
+    try {
+      await fetch('https://api.resend.com/emails', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${RESEND_API_KEY}`
+        },
+        body: JSON.stringify({
+          from: 'Blind Lake Keris <onboarding@resend.dev>',
+          to: record.contactValue,
+          subject: 'آپ کے سوال کا جواب - بلائنڈ لیک کیرس',
+          html: `<p>${message.replace(/\n/g, '<br>')}</p>`
+        })
+      });
+    } catch (err) {
+      console.error('Visitor email notification failed:', err.message);
+    }
+  }
+}
+
 // ---- Admin API: view + answer unanswered questions ----
 app.get('/api/unanswered', checkAdmin, (req, res) => {
-  res.json({ questions: loadUnanswered() });
+  const list = loadQuestions().filter(q => !q.answered);
+  res.json({ questions: list });
 });
 
 app.get('/api/knowledge', checkAdmin, (req, res) => {
   res.json({ knowledge: loadKnowledge() });
 });
 
-// Answer a specific unanswered question: adds it to the assistant's knowledge
-// and removes it from the unanswered list.
-app.post('/api/answer-question', checkAdmin, (req, res) => {
-  const { question, answer, index } = req.body;
-  if (!question || !answer) {
-    return res.status(400).json({ error: 'question and answer are required' });
+// Answer a specific question BY ID: adds it to knowledge, marks it answered,
+// and notifies the visitor back (WhatsApp/email) if they left contact info.
+app.post('/api/answer-question', checkAdmin, async (req, res) => {
+  const { id, question, answer } = req.body;
+  if (!answer || (!id && !question)) {
+    return res.status(400).json({ error: 'answer and (id or question) are required' });
   }
+
+  // Always add to knowledge so the assistant learns it
   const knowledge = loadKnowledge();
-  knowledge.unshift({ question, answer, date: new Date().toISOString() });
+  knowledge.unshift({ question: question || '', answer, date: new Date().toISOString() });
   saveKnowledge(knowledge);
 
-  if (typeof index === 'number') {
-    const list = loadUnanswered();
-    list.splice(index, 1);
-    saveUnanswered(list);
+  // Find and update the matching record
+  const list = loadQuestions();
+  const record = id
+    ? list.find(q => q.id === id)
+    : list.find(q => q.question === question && !q.answered);
+
+  if (record) {
+    record.answer = answer;
+    record.answered = true;
+    saveQuestions(list);
+    // Fire and forget — don't block the admin response on notification delivery
+    notifyVisitor(record).catch(e => console.error('notifyVisitor error:', e));
   }
+
   res.json({ success: true });
 });
 
-// Dismiss an unanswered question without adding knowledge
-app.delete('/api/unanswered/:index', checkAdmin, (req, res) => {
-  const idx = parseInt(req.params.index, 10);
-  const list = loadUnanswered();
-  if (idx >= 0 && idx < list.length) {
-    list.splice(idx, 1);
-    saveUnanswered(list);
+// Dismiss an unanswered question without adding knowledge (by id now, index kept as fallback)
+app.delete('/api/unanswered/:id', checkAdmin, (req, res) => {
+  const { id } = req.params;
+  const list = loadQuestions();
+  const idx = list.findIndex(q => q.id === id);
+  if (idx !== -1) {
+    list[idx].answered = true; // hide from admin list without sending a notification
+    saveQuestions(list);
   }
   res.json({ success: true });
 });
@@ -138,6 +239,40 @@ app.delete('/api/knowledge/:index', checkAdmin, (req, res) => {
     saveKnowledge(list);
   }
   res.json({ success: true });
+});
+
+// ---------------------------------------------------------------
+// Visitor-facing endpoints for the two-way notification flow
+// ---------------------------------------------------------------
+
+// A visitor optionally leaves contact info for a specific unanswered question
+app.post('/api/unanswered/:id/contact', (req, res) => {
+  const { id } = req.params;
+  const { contactMethod, contactValue } = req.body;
+  const list = loadQuestions();
+  const record = list.find(q => q.id === id);
+  if (!record) {
+    return res.status(404).json({ error: 'Question not found' });
+  }
+  record.contactMethod = contactMethod || null;
+  record.contactValue = contactValue || null;
+  saveQuestions(list);
+  res.json({ success: true });
+});
+
+// Polling endpoint — the chat widget calls this every ~15s to see if any
+// of ITS OWN questions (matched by sessionId) have been answered since.
+app.get('/api/check/:sessionId', (req, res) => {
+  const { sessionId } = req.params;
+  const list = loadQuestions();
+  const newAnswers = list.filter(q => q.sessionId === sessionId && q.answered && !q.notified);
+
+  if (newAnswers.length > 0) {
+    newAnswers.forEach(q => { q.notified = true; });
+    saveQuestions(list);
+  }
+
+  res.json({ newAnswers: newAnswers.map(q => ({ id: q.id, question: q.question, answer: q.answer })) });
 });
 
 // Get all visitor reviews
@@ -280,7 +415,7 @@ function buildFullSystemPrompt() {
 
 app.post('/api/chat', async (req, res) => {
   try {
-    const { messages } = req.body;
+    const { messages, sessionId } = req.body;
     if (!Array.isArray(messages)) {
       return res.status(400).json({ error: 'messages array is required' });
     }
@@ -304,11 +439,15 @@ app.post('/api/chat', async (req, res) => {
 
     let reply = data.candidates?.[0]?.content?.parts?.map(p => p.text).join('\n') || '';
 
-    // Detect the hidden "unanswered question" marker and alert the owner
+    // Detect the hidden "unanswered question" marker, log it, alert the owner,
+    // and hand back an id so the frontend can offer a "notify me back" prompt.
+    let unansweredId = null;
     const unansweredMatch = reply.match(/\|\|UNANSWERED:\s*(.+?)\|\|/);
     if (unansweredMatch) {
       const lastUserMessage = [...messages].reverse().find(m => m.role === 'user');
-      await alertOwner(lastUserMessage ? lastUserMessage.content : unansweredMatch[1]);
+      const questionText = lastUserMessage ? lastUserMessage.content : unansweredMatch[1];
+      unansweredId = logUnanswered(questionText, sessionId || null);
+      await alertOwner(questionText);
       reply = reply.replace(/\|\|UNANSWERED:.*?\|\|/g, '').trim();
     }
 
@@ -317,7 +456,8 @@ app.post('/api/chat', async (req, res) => {
       .replace(/\*\*(.*?)\*\*/g, '$1')      // remove bold **text**
       .replace(/^\s*\*\s*/gm, '• ')          // turn * item bullets into • item
       .replace(/(?<!\*)\*(?!\*)\s*/g, ' ')   // remove any stray asterisks used as bullets mid-text
-    res.json({ reply });
+
+    res.json({ reply, unansweredId });
   } catch (err) {
     console.error('Server error:', err);
     res.status(500).json({ error: 'Failed to get a response from the assistant.' });
