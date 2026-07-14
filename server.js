@@ -457,7 +457,7 @@ app.post('/api/chat', async (req, res) => {
       .replace(/^\s*\*\s*/gm, '• ')          // turn * item bullets into • item
       .replace(/(?<!\*)\*(?!\*)\s*/g, ' ')   // remove any stray asterisks used as bullets mid-text
 
-    res.json({ reply, unansweredId });
+    res.json({ reply, unanswered: !!unansweredId, unansweredId });
   } catch (err) {
     console.error('Server error:', err);
     res.status(500).json({ error: 'Failed to get a response from the assistant.' });
