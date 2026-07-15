@@ -79,19 +79,44 @@ if (RESEND_API_KEY) {
 }
 
 // ---------------------------------------------------------------
-// WhatsApp sender (Meta Cloud API) — used to notify a VISITOR
-// back with their answer, if they left a WhatsApp number.
-// Optional: only runs if WHATSAPP_TOKEN + WHATSAPP_PHONE_ID are set.
+// WhatsApp sender — used to notify a VISITOR back with their answer,
+// if they left a WhatsApp number. Two options, tried in this order:
+//   1) N8N_WHATSAPP_WEBHOOK — reuses your existing n8n WhatsApp setup
+//      (recommended, since Blue Lake Resort's agent already sends
+//      WhatsApp messages through n8n with working credentials).
+//   2) WHATSAPP_TOKEN + WHATSAPP_PHONE_ID — direct Meta Cloud API,
+//      only if you set up your own Meta Business app for this project.
+// If neither is configured, sending is skipped (logged only).
 // ---------------------------------------------------------------
+const N8N_WHATSAPP_WEBHOOK = process.env.N8N_WHATSAPP_WEBHOOK;
 const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN;
 const WHATSAPP_PHONE_ID = process.env.WHATSAPP_PHONE_ID;
 
 async function sendWhatsAppMessage(phoneNumber, message){
-  if (!WHATSAPP_TOKEN || !WHATSAPP_PHONE_ID) {
-    console.log('WhatsApp not configured — skipping visitor notification.');
+  const cleanNumber = String(phoneNumber).replace(/[^\d]/g, '');
+
+  if (N8N_WHATSAPP_WEBHOOK) {
+    try {
+      const response = await fetch(N8N_WHATSAPP_WEBHOOK, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone: cleanNumber, message })
+      });
+      if (!response.ok) {
+        console.error('n8n WhatsApp webhook returned an error:', response.status);
+      } else {
+        console.log('WhatsApp notification sent to visitor via n8n.');
+      }
+    } catch (err) {
+      console.error('Failed to send WhatsApp via n8n:', err.message);
+    }
     return;
   }
-  const cleanNumber = String(phoneNumber).replace(/[^\d]/g, '');
+
+  if (!WHATSAPP_TOKEN || !WHATSAPP_PHONE_ID) {
+    console.log('WhatsApp not configured (no N8N_WHATSAPP_WEBHOOK or WHATSAPP_TOKEN/WHATSAPP_PHONE_ID) — skipping visitor notification.');
+    return;
+  }
   try {
     const response = await fetch(`https://graph.facebook.com/v20.0/${WHATSAPP_PHONE_ID}/messages`, {
       method: 'POST',
