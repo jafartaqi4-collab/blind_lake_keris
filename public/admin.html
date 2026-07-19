@@ -88,6 +88,38 @@
   .know-answer { color: #9fd; margin-top: 6px; font-size: 14px; }
   .error { color: #f88; text-align: center; padding: 10px; }
   .status { text-align: center; font-size: 13px; color: #9fd; margin-top: -6px; margin-bottom: 12px; min-height: 16px; }
+
+  /* NEW: media attach styles */
+  .media-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 8px;
+  }
+  .media-btn {
+    background: #24333f;
+    color: #9fd;
+    font-size: 13px;
+    padding: 8px 10px;
+    flex-shrink: 0;
+  }
+  .media-preview {
+    margin-top: 8px;
+    max-width: 100%;
+  }
+  .media-preview img, .media-preview video {
+    max-width: 100%;
+    max-height: 160px;
+    border-radius: 8px;
+    display: block;
+  }
+  .media-clear {
+    background: #3a3a3a;
+    color: #f88;
+    font-size: 12px;
+    padding: 4px 8px;
+    margin-top: 4px;
+  }
 </style>
 </head>
 <body>
@@ -119,6 +151,8 @@
 let ADMIN_KEY = localStorage.getItem('blk_admin_key') || '';
 let unansweredData = [];
 let knowledgeData = [];
+// NEW: holds the picked file + read result for each question card, keyed by index
+let pendingMedia = {};
 
 function unlock(){
   const key = document.getElementById('keyInput').value.trim();
@@ -204,6 +238,7 @@ async function loadUnanswered(){
   const data = await apiGet('/api/unanswered');
   if (!data) return;
   unansweredData = data.questions;
+  pendingMedia = {}; // reset any picked-but-not-saved files when list refreshes
   const container = document.getElementById('unansweredList');
   if (!unansweredData.length) {
     container.innerHTML = '<div class="empty">فی الحال کوئی نامعلوم سوال نہیں ہے 🎉</div>';
@@ -214,12 +249,63 @@ async function loadUnanswered(){
       <div class="question">${escapeHtml(q.question)}</div>
       <div class="date">${new Date(q.date).toLocaleString('en-GB')}</div>
       <textarea id="answer-${i}" placeholder="اس سوال کا جواب یہاں لکھیں..."></textarea>
+      <div class="media-row">
+        <input type="file" accept="image/*,video/*" id="mediaFile-${i}" style="display:none;" onchange="onMediaPicked(${i})">
+        <button type="button" class="media-btn" onclick="document.getElementById('mediaFile-${i}').click()">📷 فوٹو/ویڈیو منسلک کریں</button>
+      </div>
+      <div id="mediaPreview-${i}" class="media-preview"></div>
       <div class="btn-row">
-        <button class="save" onclick="answerQuestion(${i})">محفوظ کریں</button>
+        <button class="save" id="saveBtn-${i}" onclick="answerQuestion(${i})">محفوظ کریں</button>
         <button class="dismiss" onclick="dismissQuestion(${i})">نظر انداز کریں</button>
       </div>
     </div>
   `).join('');
+}
+
+// NEW: read the picked file into memory (as base64) and show a preview
+function onMediaPicked(index){
+  const fileInput = document.getElementById('mediaFile-' + index);
+  const file = fileInput.files && fileInput.files[0];
+  if (!file) return;
+
+  const isImage = file.type.startsWith('image/');
+  const isVideo = file.type.startsWith('video/');
+  if (!isImage && !isVideo) {
+    setStatus('صرف تصویر یا ویڈیو منتخب کریں', true);
+    fileInput.value = '';
+    return;
+  }
+  // Keep uploads reasonable in size for mobile data — 20MB ceiling
+  if (file.size > 20 * 1024 * 1024) {
+    setStatus('فائل بہت بڑی ہے (زیادہ سے زیادہ 20MB)', true);
+    fileInput.value = '';
+    return;
+  }
+
+  const reader = new FileReader();
+  reader.onload = () => {
+    const dataUrl = reader.result; // e.g. "data:image/jpeg;base64,...."
+    const base64 = dataUrl.split(',')[1];
+    pendingMedia[index] = {
+      filename: file.name,
+      mimeType: file.type,
+      dataBase64: base64,
+      mediaType: isImage ? 'image' : 'video'
+    };
+    const previewEl = document.getElementById('mediaPreview-' + index);
+    const tag = isImage
+      ? `<img src="${dataUrl}">`
+      : `<video src="${dataUrl}" controls></video>`;
+    previewEl.innerHTML = `${tag}<button type="button" class="media-clear" onclick="clearMedia(${index})">❌ ہٹائیں</button>`;
+  };
+  reader.readAsDataURL(file);
+}
+
+function clearMedia(index){
+  delete pendingMedia[index];
+  document.getElementById('mediaPreview-' + index).innerHTML = '';
+  const fileInput = document.getElementById('mediaFile-' + index);
+  if (fileInput) fileInput.value = '';
 }
 
 async function loadKnowledge(){
@@ -244,20 +330,53 @@ async function loadKnowledge(){
 }
 
 async function answerQuestion(index){
-  const question = unansweredData[index] ? unansweredData[index].question : '';
+  const record = unansweredData[index];
+  const question = record ? record.question : '';
+  const id = record ? record.id : null;
   const answerBox = document.getElementById('answer-' + index);
   const answer = answerBox ? answerBox.value.trim() : '';
   if (!answer) { setStatus('براہ کرم جواب لکھیں', true); return; }
+
+  const saveBtn = document.getElementById('saveBtn-' + index);
+  if (saveBtn) { saveBtn.disabled = true; saveBtn.textContent = 'محفوظ ہو رہا ہے...'; }
   setStatus('محفوظ ہو رہا ہے...');
-  const result = await apiPost('/api/answer-question', { question, answer, index });
+
+  let mediaUrl = null;
+  let mediaType = null;
+
+  // NEW: if a photo/video was picked, upload it first
+  const media = pendingMedia[index];
+  if (media) {
+    setStatus('تصویر/ویڈیو اپلوڈ ہو رہی ہے...');
+    const uploadResult = await apiPost('/api/upload', {
+      filename: media.filename,
+      mimeType: media.mimeType,
+      dataBase64: media.dataBase64
+    });
+    if (!uploadResult || !uploadResult.success) {
+      setStatus('میڈیا اپلوڈ ناکام — دوبارہ کوشش کریں', true);
+      if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = 'محفوظ کریں'; }
+      return;
+    }
+    mediaUrl = uploadResult.url;
+    mediaType = uploadResult.mediaType;
+  }
+
+  setStatus('جواب محفوظ ہو رہا ہے...');
+  const result = await apiPost('/api/answer-question', { id, question, answer, mediaUrl, mediaType });
   if (result && result.success) {
     setStatus('کامیابی سے محفوظ ہو گیا ✅');
+    delete pendingMedia[index];
     loadUnanswered();
+  } else {
+    if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = 'محفوظ کریں'; }
   }
 }
 
 async function dismissQuestion(index){
-  const result = await apiDelete('/api/unanswered/' + index);
+  const record = unansweredData[index];
+  const id = record ? record.id : index; // fall back to old index-based route if no id
+  const result = await apiDelete('/api/unanswered/' + id);
   if (result && result.success) {
     setStatus('سوال ہٹا دیا گیا');
     loadUnanswered();
