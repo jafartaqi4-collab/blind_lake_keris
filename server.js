@@ -4,8 +4,17 @@ const fs = require('fs');
 const crypto = require('crypto');
 
 const app = express();
-app.use(express.json());
+app.use(express.json({ limit: '30mb' })); // raised so admin can attach photos/videos as base64
 app.use(express.static(path.join(__dirname, 'public')));
+
+// Folder where admin-uploaded photos/videos are stored (served automatically
+// since it's inside /public). Created on first run if missing.
+const UPLOADS_DIR = path.join(__dirname, 'public', 'uploads');
+if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+
+// The public URL of this site — used to build full links for WhatsApp media
+// messages (Meta needs a real https:// link, not a relative path).
+const PUBLIC_BASE_URL = process.env.PUBLIC_BASE_URL || 'https://keris-production.up.railway.app';
 
 const REVIEWS_FILE = path.join(__dirname, 'reviews.json');
 function loadReviews(){
@@ -44,6 +53,8 @@ function logUnanswered(question, sessionId){
     date: new Date().toISOString(),
     answered: false,
     answer: null,
+    mediaUrl: null,    // relative path like /uploads/xxxx.jpg, filled in if admin attaches a photo/video
+    mediaType: null,   // 'image' or 'video'
     contactMethod: null,   // 'whatsapp' | 'email' | null
     contactValue: null,
     notified: false
@@ -142,6 +153,56 @@ async function sendWhatsAppMessage(phoneNumber, message){
   }
 }
 
+// Send a photo or video to a visitor's WhatsApp, with an optional caption.
+// mediaUrl must be a full public https:// link (we build this from PUBLIC_BASE_URL).
+async function sendWhatsAppMedia(phoneNumber, mediaUrl, mediaType, caption){
+  const cleanNumber = String(phoneNumber).replace(/[^\d]/g, '');
+  const kind = mediaType === 'video' ? 'video' : 'image'; // default to image
+
+  if (N8N_WHATSAPP_WEBHOOK) {
+    try {
+      const response = await fetch(N8N_WHATSAPP_WEBHOOK, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone: cleanNumber, message: caption, mediaUrl, mediaType: kind })
+      });
+      if (!response.ok) console.error('n8n WhatsApp webhook (media) returned an error:', response.status);
+      else console.log('WhatsApp media notification sent to visitor via n8n.');
+    } catch (err) {
+      console.error('Failed to send WhatsApp media via n8n:', err.message);
+    }
+    return;
+  }
+
+  if (!WHATSAPP_TOKEN || !WHATSAPP_PHONE_ID) {
+    console.log('WhatsApp not configured — skipping visitor media notification.');
+    return;
+  }
+  try {
+    const response = await fetch(`https://graph.facebook.com/v20.0/${WHATSAPP_PHONE_ID}/messages`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${WHATSAPP_TOKEN}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        messaging_product: 'whatsapp',
+        to: cleanNumber,
+        type: kind,
+        [kind]: { link: mediaUrl, caption: caption || '' }
+      })
+    });
+    if (!response.ok) {
+      const errText = await response.text();
+      console.error('WhatsApp media send failed:', errText);
+    } else {
+      console.log('WhatsApp media notification sent to visitor.');
+    }
+  } catch (err) {
+    console.error('WhatsApp media send error:', err.message);
+  }
+}
+
 // Notify the owner by email that a new question needs an answer (unchanged behavior)
 async function alertOwner(question){
   if (!RESEND_API_KEY) {
@@ -179,7 +240,12 @@ async function notifyVisitor(record){
   const message = `السلام علیکم!\n\nآپ نے بلائنڈ لیک کیرس اسسٹنٹ سے پوچھا تھا:\n"${record.question}"\n\nجواب:\n${record.answer}\n\nشکریہ - بلائنڈ لیک کیرس`;
 
   if (record.contactMethod === 'whatsapp' && record.contactValue) {
-    await sendWhatsAppMessage(record.contactValue, message);
+    if (record.mediaUrl) {
+      const fullMediaUrl = record.mediaUrl.startsWith('http') ? record.mediaUrl : `${PUBLIC_BASE_URL}${record.mediaUrl}`;
+      await sendWhatsAppMedia(record.contactValue, fullMediaUrl, record.mediaType, message);
+    } else {
+      await sendWhatsAppMessage(record.contactValue, message);
+    }
   }
 
   if (record.contactMethod === 'email' && record.contactValue && RESEND_API_KEY) {
@@ -203,6 +269,30 @@ async function notifyVisitor(record){
   }
 }
 
+// ---- Admin: upload a photo/video to attach to an answer ----
+// Accepts { filename, dataBase64, mimeType } and returns the saved relative URL.
+app.post('/api/upload', checkAdmin, (req, res) => {
+  try {
+    const { filename, dataBase64, mimeType } = req.body;
+    if (!dataBase64 || !mimeType) {
+      return res.status(400).json({ error: 'dataBase64 and mimeType are required' });
+    }
+    const isImage = mimeType.startsWith('image/');
+    const isVideo = mimeType.startsWith('video/');
+    if (!isImage && !isVideo) {
+      return res.status(400).json({ error: 'Only image or video files are allowed' });
+    }
+    const ext = (filename && filename.includes('.')) ? filename.split('.').pop().slice(0, 5) : (isImage ? 'jpg' : 'mp4');
+    const safeName = `${Date.now()}-${crypto.randomBytes(4).toString('hex')}.${ext}`;
+    const filePath = path.join(UPLOADS_DIR, safeName);
+    fs.writeFileSync(filePath, Buffer.from(dataBase64, 'base64'));
+    res.json({ success: true, url: `/uploads/${safeName}`, mediaType: isImage ? 'image' : 'video' });
+  } catch (err) {
+    console.error('Upload error:', err.message);
+    res.status(500).json({ error: 'Upload failed' });
+  }
+});
+
 // ---- Admin API: view + answer unanswered questions ----
 app.get('/api/unanswered', checkAdmin, (req, res) => {
   const list = loadQuestions().filter(q => !q.answered);
@@ -216,7 +306,7 @@ app.get('/api/knowledge', checkAdmin, (req, res) => {
 // Answer a specific question BY ID: adds it to knowledge, marks it answered,
 // and notifies the visitor back (WhatsApp/email) if they left contact info.
 app.post('/api/answer-question', checkAdmin, async (req, res) => {
-  const { id, question, answer } = req.body;
+  const { id, question, answer, mediaUrl, mediaType } = req.body;
   if (!answer || (!id && !question)) {
     return res.status(400).json({ error: 'answer and (id or question) are required' });
   }
@@ -235,6 +325,10 @@ app.post('/api/answer-question', checkAdmin, async (req, res) => {
   if (record) {
     record.answer = answer;
     record.answered = true;
+    if (mediaUrl) {
+      record.mediaUrl = mediaUrl;
+      record.mediaType = mediaType || 'image';
+    }
     saveQuestions(list);
     // Fire and forget — don't block the admin response on notification delivery
     notifyVisitor(record).catch(e => console.error('notifyVisitor error:', e));
@@ -297,7 +391,7 @@ app.get('/api/check/:sessionId', (req, res) => {
     saveQuestions(list);
   }
 
-  res.json({ newAnswers: newAnswers.map(q => ({ id: q.id, question: q.question, answer: q.answer })) });
+  res.json({ newAnswers: newAnswers.map(q => ({ id: q.id, question: q.question, answer: q.answer, mediaUrl: q.mediaUrl, mediaType: q.mediaType })) });
 });
 
 // Get all visitor reviews
