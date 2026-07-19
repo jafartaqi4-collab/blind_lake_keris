@@ -62,9 +62,18 @@ async function checkForAnswers(){
         box.className = 'bubble bot';
         box.style.cssText = 'background:#e8f5e9;border-right:4px solid #2e7d32;';
         if (/[\u0600-\u06FF]/.test(item.answer)) box.classList.add('rtl');
+        let mediaHtml = '';
+        if (item.mediaUrl) {
+          if (item.mediaType === 'video') {
+            mediaHtml = `<video src="${item.mediaUrl}" controls style="width:100%;border-radius:8px;margin:6px 0;"></video>`;
+          } else {
+            mediaHtml = `<img src="${item.mediaUrl}" style="width:100%;border-radius:8px;margin:6px 0;" alt="attachment" />`;
+          }
+        }
         box.innerHTML = `
           <p style="font-size:11.5px;color:#2e7d32;margin:0 0 6px;">✅ آپ کے سابقہ سوال کا جواب آ گیا</p>
           <p style="font-size:13px;color:#555;margin:0 0 4px;"><em>${item.question}</em></p>
+          ${mediaHtml}
           <p style="margin:0;">${item.answer}</p>
         `;
         chatEl.appendChild(box);
